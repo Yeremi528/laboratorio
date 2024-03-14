@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	db "github.com/Yeremi528/laboratorio/business/data/dbsql/pgx"
 	"github.com/Yeremi528/laboratorio/business/web/debug"
 	"github.com/Yeremi528/laboratorio/foundation/logger"
 	"github.com/Yeremi528/laboratorio/foundation/web"
@@ -145,14 +144,20 @@ func run(ctx context.Context, log *logger.Logger) error {
 
 	log.Info(ctx, "startup", "status", "initializing database support", "hostport", cfg.DB.HostPort)
 
-	db, err := db.Open(db.Config{
-		User:         cfg.DB.User,
-		Password:     cfg.DB.Password,
-		Host:         cfg.DB.HostPort,
-		Name:         cfg.DB.Name,
-		MaxIdleConns: cfg.DB.MaxIdleConns,
-		MaxOpenConns: cfg.DB.MaxOpenConns,
-		DisableTLS:   cfg.DB.DisableTLS,
+	db, err := pgx.Open(pgx.Config{
+		User:            hiddenAppConfig.Postgres.User,
+		Password:        hiddenAppConfig.Postgres.Password,
+		Host:            hiddenAppConfig.Postgres.Host,
+		Port:            hiddenAppConfig.Postgres.Port,
+		Name:            hiddenAppConfig.Postgres.Name,
+		MaxIdleConns:    hiddenAppConfig.Postgres.MaxIdleConns,
+		MaxOpenConns:    hiddenAppConfig.Postgres.MaxOpenConns,
+		IdleConnTimeout: hiddenAppConfig.Postgres.ConnMaxIdleTime,
+		EnableTLS:       hiddenAppConfig.Postgres.EnableTLS,
+		CACert:          tmpServerCA,
+		ClientCert:      tmpClientCert,
+		ClientKey:       tmpClientKey,
+		ApplicationName: "onboarding/go-ms-enrollment-finalize",
 	})
 	if err != nil {
 		return fmt.Errorf("connecting to db: %w", err)

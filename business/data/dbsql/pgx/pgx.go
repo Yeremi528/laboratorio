@@ -1,5 +1,5 @@
-// Package db provides support for access the database.
-package db
+// Package postgres provides support for access the postgres database.
+package pgx
 
 import (
 	"context"
@@ -10,8 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Yeremi528/laboratorio/foundation/logger"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -29,26 +30,40 @@ var (
 
 // Config is the required properties to use the database.
 type Config struct {
-	User         string
-	Password     string
-	Host         string
-	Name         string
-	Schema       string
-	MaxIdleConns int
-	MaxOpenConns int
-	DisableTLS   bool
+	User            string
+	Password        string
+	Host            string
+	Port            string
+	Name            string
+	Schema          string
+	MaxIdleConns    int
+	MaxOpenConns    int
+	IdleConnTimeout time.Duration
+	EnableTLS       bool
+	CACert          string
+	ClientCert      string
+	ClientKey       string
+	ApplicationName string
 }
 
 // Open knows how to open a database connection based on the configuration.
 func Open(cfg Config) (*sqlx.DB, error) {
-	sslMode := "require"
-	if cfg.DisableTLS {
-		sslMode = "disable"
+	sslMode, err := getSSLMode(cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	q := make(url.Values)
 	q.Set("sslmode", sslMode)
 	q.Set("timezone", "utc")
+	q.Set("application_name", cfg.ApplicationName)
+
+	if cfg.EnableTLS {
+		q.Set("sslrootcert", cfg.CACert)
+		q.Set("sslcert", cfg.ClientCert)
+		q.Set("sslkey", cfg.ClientKey)
+	}
+
 	if cfg.Schema != "" {
 		q.Set("search_path", cfg.Schema)
 	}
@@ -56,7 +71,7 @@ func Open(cfg Config) (*sqlx.DB, error) {
 	u := url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(cfg.User, cfg.Password),
-		Host:     cfg.Host,
+		Host:     cfg.Host + ":" + cfg.Port,
 		Path:     cfg.Name,
 		RawQuery: q.Encode(),
 	}
@@ -67,102 +82,40 @@ func Open(cfg Config) (*sqlx.DB, error) {
 	}
 	db.SetMaxIdleConns(cfg.MaxIdleConns)
 	db.SetMaxOpenConns(cfg.MaxOpenConns)
+	db.SetConnMaxIdleTime(cfg.IdleConnTimeout)
+
+	// Status check
+
+	t := time.Second * 5
+	ctx, cancel := context.WithTimeout(context.Background(), t)
+	defer cancel()
+
+	if err := StatusCheck(ctx, db); err != nil {
+		return nil, fmt.Errorf("database status check: %w", err)
+	}
 
 	return db, nil
 }
 
-// StatusCheck returns nil if it can successfully talk to the database. It
-// returns a non-nil error otherwise.
-func StatusCheck(ctx context.Context, db *sqlx.DB) error {
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Second)
-		defer cancel()
+func getSSLMode(cfg Config) (string, error) {
+	if !cfg.EnableTLS {
+		return "disable", nil
 	}
 
-	var pingError error
-	for attempts := 1; ; attempts++ {
-		pingError = db.Ping()
-		if pingError == nil {
-			break
-		}
-		time.Sleep(time.Duration(attempts) * 100 * time.Millisecond)
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	if cfg.CACert == "" || cfg.ClientCert == "" || cfg.ClientKey == "" {
+		return "", fmt.Errorf("SSL certificates not properly configured")
 	}
 
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	// Run a simple query to determine connectivity.
-	// Running this query forces a round trip through the database.
-	const q = `SELECT true`
-	var tmp bool
-	return db.QueryRowContext(ctx, q).Scan(&tmp)
+	return "require", nil
 }
 
-// NamedExecContext is a helper function to execute a CUD operation with
-// logging and tracing where field replacement is necessary.
-func NamedExecContext(ctx context.Context, log *logger.Logger, db sqlx.ExtContext, query string, data any) error {
-	q := queryString(query, data)
-
-	if _, ok := data.(struct{}); ok {
-		log.Infoc(ctx, 5, "database.NamedExecContext", "query", q)
-	} else {
-		log.Infoc(ctx, 4, "database.NamedExecContext", "query", q)
-	}
-
-	if _, err := sqlx.NamedExecContext(ctx, db, query, data); err != nil {
-		if pqerr, ok := err.(*pgconn.PgError); ok {
-			switch pqerr.Code {
-			case undefinedTable:
-				return ErrUndefinedTable
-			case uniqueViolation:
-				return ErrDBDuplicatedEntry
-			}
-		}
-		return err
-	}
-
-	return nil
-}
-
-// NamedQueryStruct is a helper function for executing queries that return a
-// single value to be unmarshalled into a struct type where field replacement is necessary.
-func NamedQueryStruct(ctx context.Context, log *logger.Logger, db sqlx.ExtContext, query string, data any, dest any) error {
-	return namedQueryStruct(ctx, log, db, query, data, dest, false)
-}
-
-func namedQueryStruct(ctx context.Context, log *logger.Logger, db sqlx.ExtContext, query string, data any, dest any, withIn bool) error {
-	q := queryString(query, data)
-
-	log.Infoc(ctx, 5, "database.NamedQueryStruct", "query", q)
-
+// RunQuery is a helper function for executing queries that return a
+// single value to be unmarshalled into a struct type.
+func RunQuery(ctx context.Context, db sqlx.ExtContext, query string, dest any) error {
 	var rows *sqlx.Rows
 	var err error
 
-	switch withIn {
-	case true:
-		rows, err = func() (*sqlx.Rows, error) {
-			named, args, err := sqlx.Named(query, data)
-			if err != nil {
-				return nil, err
-			}
-
-			query, args, err := sqlx.In(named, args...)
-			if err != nil {
-				return nil, err
-			}
-
-			query = db.Rebind(query)
-			return db.QueryxContext(ctx, query, args...)
-		}()
-
-	default:
-		rows, err = sqlx.NamedQueryContext(ctx, db, query, data)
-	}
+	rows, err = sqlx.NamedQueryContext(ctx, db, query, struct{}{})
 
 	if err != nil {
 		if pqerr, ok := err.(*pgconn.PgError); ok && pqerr.Code == undefinedTable {
@@ -183,41 +136,13 @@ func namedQueryStruct(ctx context.Context, log *logger.Logger, db sqlx.ExtContex
 	return nil
 }
 
-// NamedQuerySlice is a helper function for executing queries that return a
-// collection of data to be unmarshalled into a slice where field replacement is
-// necessary.
-func NamedQuerySlice[T any](ctx context.Context, log *logger.Logger, db sqlx.ExtContext, query string, data any, dest *[]T) error {
-	return namedQuerySlice(ctx, log, db, query, data, dest, false)
-}
-
-func namedQuerySlice[T any](ctx context.Context, log *logger.Logger, db sqlx.ExtContext, query string, data any, dest *[]T, withIn bool) error {
-	q := queryString(query, data)
-
-	log.Infoc(ctx, 5, "database.NamedQuerySlice", "query", q)
-
+// RunQuerySlice is a helper function for executing queries that return a
+// collection of data to be unmarshalled into a slice.
+func RunQuerySlice[T any](ctx context.Context, db sqlx.ExtContext, query string, dest *[]T) error {
 	var rows *sqlx.Rows
 	var err error
 
-	switch withIn {
-	case true:
-		rows, err = func() (*sqlx.Rows, error) {
-			named, args, err := sqlx.Named(query, data)
-			if err != nil {
-				return nil, err
-			}
-
-			query, args, err := sqlx.In(named, args...)
-			if err != nil {
-				return nil, err
-			}
-
-			query = db.Rebind(query)
-			return db.QueryxContext(ctx, query, args...)
-		}()
-
-	default:
-		rows, err = sqlx.NamedQueryContext(ctx, db, query, data)
-	}
+	rows, err = sqlx.NamedQueryContext(ctx, db, query, struct{}{})
 
 	if err != nil {
 		if pqerr, ok := err.(*pgconn.PgError); ok && pqerr.Code == undefinedTable {
@@ -240,10 +165,57 @@ func namedQuerySlice[T any](ctx context.Context, log *logger.Logger, db sqlx.Ext
 	return nil
 }
 
-// =============================================================================
+// RunCUD is a helper function to execute a create, update, or delete operation.
+func RunCUD(ctx context.Context, db sqlx.ExtContext, query string, data any) error {
+	if _, err := sqlx.NamedExecContext(ctx, db, query, data); err != nil {
+		if pqerr, ok := err.(*pgconn.PgError); ok {
+			switch pqerr.Code {
+			case undefinedTable:
+				return ErrUndefinedTable
+			case uniqueViolation:
+				return ErrDBDuplicatedEntry
+			}
+		}
+		return err
+	}
 
-// queryString provides a pretty print version of the query and parameters.
-func queryString(query string, args any) string {
+	return nil
+}
+
+// StatusCheck returns nil if it can successfully talk to the database. It
+// returns a non-nil error otherwise.
+func StatusCheck(ctx context.Context, db *sqlx.DB) error {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Second*5)
+		defer cancel()
+	}
+
+	var pingError error
+	for attempts := 1; ; attempts++ {
+		pingError = db.PingContext(ctx)
+		if pingError == nil {
+			break
+		}
+		time.Sleep(time.Duration(attempts) * 1 * time.Second)
+		if ctx.Err() != nil {
+			return fmt.Errorf("%w : database: %w", ctx.Err(), pingError)
+		}
+	}
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Run a simple query to determine connectivity.
+	// Running this query forces a round trip through the database.
+	const q = `SELECT true`
+	var tmp bool
+	return db.QueryRowContext(ctx, q).Scan(&tmp)
+}
+
+// ParseQuery provides a pretty version of the query and parameters.
+func ParseQuery(query string, args any) string {
 	query, params, err := sqlx.Named(query, args)
 	if err != nil {
 		return err.Error()
@@ -256,6 +228,8 @@ func queryString(query string, args any) string {
 			value = fmt.Sprintf("'%s'", v)
 		case []byte:
 			value = fmt.Sprintf("'%s'", string(v))
+		case uuid.UUID:
+			value = fmt.Sprintf("'%s'", v)
 		default:
 			value = fmt.Sprintf("%v", v)
 		}
