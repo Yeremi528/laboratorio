@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"gitlab.com/ccla/tapp/wallet/go-ms-banner/foundation/mask"
+	"github.com/Yeremi528/laboratorio/foundation/mask"
 )
 
 // Respond converts the input data to JSON and sends it to the client.

@@ -12,13 +12,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ardanlabs/conf"
+	db "github.com/Yeremi528/laboratorio/business/data/dbsql/pgx"
+	"github.com/Yeremi528/laboratorio/business/web/debug"
+	"github.com/Yeremi528/laboratorio/foundation/logger"
+	"github.com/Yeremi528/laboratorio/foundation/web"
 	"github.com/ardanlabs/conf/v3"
-	"github.com/ardanlabs/service/business/data/sqldb"
-	"github.com/ardanlabs/service/business/web/v1/debug"
-	"github.com/ardanlabs/service/business/web/v1/mux"
-	"github.com/ardanlabs/service/foundation/logger"
-	"github.com/ardanlabs/service/foundation/web"
 )
 
 var build = "dev"
@@ -53,7 +51,7 @@ func main() {
 		v := web.GetValues(ctx)
 
 		fields := make([]any, 2, 4)
-		fields[0], fields[1] = "traceID", v.traceID
+		fields[0], fields[1] = "traceID", v.TraceID
 
 		return fields
 	}
@@ -147,10 +145,10 @@ func run(ctx context.Context, log *logger.Logger) error {
 
 	log.Info(ctx, "startup", "status", "initializing database support", "hostport", cfg.DB.HostPort)
 
-	db, err := sqldb.Open(sqldb.Config{
+	db, err := db.Open(db.Config{
 		User:         cfg.DB.User,
 		Password:     cfg.DB.Password,
-		HostPort:     cfg.DB.HostPort,
+		Host:         cfg.DB.HostPort,
 		Name:         cfg.DB.Name,
 		MaxIdleConns: cfg.DB.MaxIdleConns,
 		MaxOpenConns: cfg.DB.MaxOpenConns,
@@ -183,16 +181,9 @@ func run(ctx context.Context, log *logger.Logger) error {
 	shutdown := make(chan os.Signal, 1)
 	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
 
-	cfgMux := mux.Config{
-		Build:    build,
-		Shutdown: shutdown,
-		Log:      log,
-		DB:       db,
-	}
-
 	api := http.Server{
 		Addr:         cfg.Web.APIHost,
-		Handler:      mux.WebAPI(cfgMux, buildRoutes(), mux.WithCORS(cfg.Web.CORSAllowedOrigins)),
+		Handler:      debug.Mux(),
 		ReadTimeout:  cfg.Web.ReadTimeout,
 		WriteTimeout: cfg.Web.WriteTimeout,
 		IdleTimeout:  cfg.Web.IdleTimeout,
