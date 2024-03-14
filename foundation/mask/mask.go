@@ -6,39 +6,20 @@ import (
 	"github.com/showa-93/go-mask"
 )
 
-const (
-	MaskTypePhone = "phone"
-	MaskTypeEmail = "email"
-	MaskTypeName  = "name"
-)
-
-type Masker struct {
-	masker *mask.Masker
-}
-
-func New() *Masker {
-	masker := mask.NewMasker()
-
-	masker.RegisterMaskStringFunc(mask.MaskTypeFilled, masker.MaskFilledString)
-	masker.RegisterMaskStringFunc(mask.MaskTypeFixed, masker.MaskFixedString)
-	masker.RegisterMaskStringFunc(MaskTypeEmail, maskEmail)
-	masker.RegisterMaskStringFunc(MaskTypePhone, maskPhone)
-	masker.RegisterMaskStringFunc(MaskTypeName, maskName)
-
-	return &Masker{masker: masker}
-}
-
 // Struct takes a struct value and a list of field names (optional).
 // It masks the values of the specified fields in the JSON with a predefined mask.
 // The function returns the masked struct as a byte slice or an error if any.
 // We encourage you to use the mask tag for readability instead of the optional params.
-func (m *Masker) Struct(v any, params ...string) (any, error) {
+func Struct(v any, params ...string) (any, error) {
+	masker := mask.NewMasker()
+	masker.RegisterMaskStringFunc(mask.MaskTypeFilled, masker.MaskFilledString)
+	masker.RegisterMaskStringFunc(mask.MaskTypeFixed, masker.MaskFixedString)
 	for _, p := range params {
-		m.masker.RegisterMaskField(p, "filled")
-		m.masker.RegisterMaskField(p, "fixed")
+		masker.RegisterMaskField(p, "filled")
+		masker.RegisterMaskField(p, "fixed")
 	}
 
-	masked, err := m.masker.Mask(v)
+	masked, err := masker.Mask(v)
 	if err != nil {
 		return nil, err
 	}
@@ -50,14 +31,16 @@ func (m *Masker) Struct(v any, params ...string) (any, error) {
 // It masks the values of the specified fields in the JSON with a predefined mask.
 // The function returns the masked struct as a byte slice or an error if any.
 // We encourage you to use the mask tag for readability instead of the optional params.
-func (m *Masker) StructToByte(v any, params ...string) ([]byte, error) {
+func StructToByte(v any, params ...string) ([]byte, error) {
+	masker := mask.NewMasker()
+	masker.RegisterMaskStringFunc(mask.MaskTypeFilled, masker.MaskFilledString)
+	masker.RegisterMaskStringFunc(mask.MaskTypeFixed, masker.MaskFixedString)
 	for _, p := range params {
-		m.masker.RegisterMaskField(p, "filled")
-		m.masker.RegisterMaskField(p, "fixed")
-
+		masker.RegisterMaskField(p, "filled")
+		masker.RegisterMaskField(p, "fixed")
 	}
 
-	masked, err := m.masker.Mask(v)
+	masked, err := masker.Mask(v)
 	if err != nil {
 		return nil, err
 	}
@@ -74,19 +57,22 @@ func (m *Masker) StructToByte(v any, params ...string) ([]byte, error) {
 // It masks the values of the specified fields in the JSON with a predefined mask.
 // The function returns the masked JSON byte slice or an error if any.
 // If you have the struct opt for the Struct function instead, and complement it using the mask tag.
-func (m *Masker) JSONBytes(data []byte, params ...string) ([]byte, error) {
-	var mapValue map[string]any
+func JSONBytes(data []byte, params ...string) ([]byte, error) {
+	var m map[string]any
 
-	if err := json.Unmarshal(data, &mapValue); err != nil {
+	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, err
 	}
 
+	masker := mask.NewMasker()
+	masker.RegisterMaskStringFunc(mask.MaskTypeFilled, masker.MaskFilledString)
+	masker.RegisterMaskStringFunc(mask.MaskTypeFixed, masker.MaskFixedString)
 	for _, p := range params {
-		m.masker.RegisterMaskField(p, "filled")
-		m.masker.RegisterMaskField(p, "fixed")
+		masker.RegisterMaskField(p, "filled")
+		masker.RegisterMaskField(p, "fixed")
 	}
 
-	masked, err := m.masker.Mask(mapValue)
+	masked, err := masker.Mask(m)
 	if err != nil {
 		return nil, err
 	}
