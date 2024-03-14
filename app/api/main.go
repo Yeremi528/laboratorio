@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Yeremi528/laboratorio/business/data/dbsql/pgx"
 	"github.com/Yeremi528/laboratorio/business/web/debug"
 	"github.com/Yeremi528/laboratorio/foundation/logger"
 	"github.com/Yeremi528/laboratorio/foundation/web"
@@ -93,8 +94,8 @@ func run(ctx context.Context, log *logger.Logger) error {
 		}
 		DB struct {
 			User         string `conf:"default:postgres"`
-			Password     string `conf:"default:postgres,mask"`
-			HostPort     string `conf:"default:database-service.sales-system.svc.cluster.local"`
+			Password     string `conf:"default:julia123,mask"`
+			HostPort     string `conf:"default:35.192.78.50"`
 			Name         string `conf:"default:postgres"`
 			MaxIdleConns int    `conf:"default:2"`
 			MaxOpenConns int    `conf:"default:0"`
@@ -143,20 +144,17 @@ func run(ctx context.Context, log *logger.Logger) error {
 	// Database Support
 
 	log.Info(ctx, "startup", "status", "initializing database support", "hostport", cfg.DB.HostPort)
-
 	db, err := pgx.Open(pgx.Config{
-		User:            hiddenAppConfig.Postgres.User,
-		Password:        hiddenAppConfig.Postgres.Password,
-		Host:            hiddenAppConfig.Postgres.Host,
-		Port:            hiddenAppConfig.Postgres.Port,
-		Name:            hiddenAppConfig.Postgres.Name,
-		MaxIdleConns:    hiddenAppConfig.Postgres.MaxIdleConns,
-		MaxOpenConns:    hiddenAppConfig.Postgres.MaxOpenConns,
-		IdleConnTimeout: hiddenAppConfig.Postgres.ConnMaxIdleTime,
-		EnableTLS:       hiddenAppConfig.Postgres.EnableTLS,
-		CACert:          tmpServerCA,
-		ClientCert:      tmpClientCert,
-		ClientKey:       tmpClientKey,
+		User:     cfg.DB.User,
+		Password: cfg.DB.Password,
+		Host:     cfg.DB.HostPort,
+		Name:     cfg.DB.Name,
+
+		MaxIdleConns:    cfg.DB.MaxIdleConns,
+		MaxOpenConns:    cfg.DB.MaxOpenConns,
+		Port:            "5432",
+		IdleConnTimeout: 30,
+
 		ApplicationName: "onboarding/go-ms-enrollment-finalize",
 	})
 	if err != nil {
